@@ -2,11 +2,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from sklearn.linear_model import LinearRegression
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from io import BytesIO
-import base64
 
 st.set_page_config(layout="wide", page_title="IndiaCrimetrics 🚔")
 
@@ -37,7 +37,7 @@ def to_excel_download(df):
     return output.getvalue()
 
 # --------------------------------------
-# 📤 File Upload
+# 📄 File Upload
 # --------------------------------------
 st.sidebar.title("📁 Upload Excel File")
 uploaded_file = st.sidebar.file_uploader("Choose a crime data Excel file", type=["xlsx", "xls"])
@@ -47,12 +47,9 @@ if uploaded_file:
     df = preprocess_crime_data(df_raw)
 
     st.title("🔍 IndiaCrimetrics")
-    st.dataframe(df, use_container_width=True)  # 🔄 Show full DataFrame here
+    st.dataframe(df, use_container_width=True)
 
-    # --------------------------------------
-    # 🔎 Filters
-    # --------------------------------------
-    st.sidebar.title("🔎 Filters")
+    st.sidebar.title("🔍 Filters")
     years = sorted(df['YEAR'].unique())
     states = sorted(df['STATE/UT'].unique())
     crime_columns = [col for col in df.columns if col not in ['STATE/UT', 'YEAR', 'TOTAL  CRIMES', 'Cluster', 'PCA1', 'PCA2']]
@@ -60,15 +57,11 @@ if uploaded_file:
     selected_year = st.sidebar.selectbox("Select Year", years)
     selected_state = st.sidebar.selectbox("Select State", states)
     search_crime = st.sidebar.text_input("🔍 Search Crime Type").lower()
-    
     filtered_crimes = [crime for crime in crime_columns if search_crime in crime.lower()]
     selected_crimes = st.sidebar.multiselect("Select Crime Type(s)", filtered_crimes, default=filtered_crimes)
 
     filtered_df = df[(df['YEAR'] == selected_year) & (df['STATE/UT'] == selected_state)]
 
-    # --------------------------------------
-    # 📊 Crime Chart
-    # --------------------------------------
     st.header(f"📈 Crime Summary for {selected_state} in {selected_year}")
     if not filtered_df.empty:
         crime_data = filtered_df[selected_crimes].select_dtypes(include=np.number).sum()
@@ -83,15 +76,11 @@ if uploaded_file:
     else:
         st.warning("No data available for selected year and state.")
 
-    # --------------------------------------
-    # 🔗 Clustering
-    # --------------------------------------
     st.header("🔗 Crime Clustering Analysis")
     numeric_cluster_data = df[crime_columns + ['TOTAL  CRIMES']].select_dtypes(include=np.number)
     scaler = StandardScaler()
     scaled_data = scaler.fit_transform(numeric_cluster_data)
 
-    # Elbow Curve
     st.subheader("📈 Elbow Curve for Optimal Clusters")
     distortions = []
     k_range = range(1, 10)
@@ -105,7 +94,6 @@ if uploaded_file:
                         title='Elbow Curve')
     st.plotly_chart(fig_elbow, use_container_width=True)
 
-    # Clustering & PCA
     kmeans = KMeans(n_clusters=3, random_state=42)
     df['Cluster'] = kmeans.fit_predict(scaled_data)
 
@@ -115,37 +103,69 @@ if uploaded_file:
 
     fig_cluster = px.scatter(
         df, x='PCA1', y='PCA2', color=df['Cluster'].astype(str),
-        hover_data=['STATE/UT', 'YEAR'], title='Crime Pattern Clustering'
-    )
+        hover_data=['STATE/UT', 'YEAR'], title='Crime Pattern Clustering')
     st.plotly_chart(fig_cluster, use_container_width=True)
 
-    # Cluster Distribution
+    # 🔮 Predictive Modeling (State-wise Linear Regression)
+    st.header("🔮 Predictive Modeling: State-wise Crime Forecasting")
+    st.markdown("This section uses Linear Regression to predict future total crimes per state for a selected year.")
+
+    selected_future_year = st.slider(
+        "📅 Select a year to predict total crimes for each state",
+        min_value=int(df['YEAR'].min()),
+        max_value=int(df['YEAR'].max()) + 10,
+        value=int(df['YEAR'].max()) + 1
+    )
+
+    state_predictions = []
+    for state in df['STATE/UT'].unique():
+        state_df = df[df['STATE/UT'] == state][['YEAR', 'TOTAL  CRIMES']]
+        if state_df['YEAR'].nunique() < 2:
+            continue
+        X = state_df[['YEAR']]
+        y = state_df['TOTAL  CRIMES']
+        model = LinearRegression()
+        model.fit(X, y)
+        predicted = model.predict([[selected_future_year]])[0]
+        state_predictions.append({'STATE/UT': state, 'Predicted Crimes': predicted})
+
+    prediction_df = pd.DataFrame(state_predictions).sort_values(by='Predicted Crimes', ascending=False)
+
+    st.subheader(f"📊 Predicted Total Crimes for {selected_future_year}")
+    st.dataframe(prediction_df, use_container_width=True)
+
+    fig_state_pred = px.bar(prediction_df, x='STATE/UT', y='Predicted Crimes',
+                            title=f"Predicted Crime Totals by State for {selected_future_year}",
+                            color='Predicted Crimes', color_continuous_scale='Reds')
+    st.plotly_chart(fig_state_pred, use_container_width=True)
+
+    # 📊 Cluster Distribution
     st.subheader("📊 Cluster Distribution")
     cluster_counts = df['Cluster'].value_counts().sort_index()
     fig_cluster_dist = px.pie(values=cluster_counts.values, names=cluster_counts.index.astype(str),
                               title="Distribution of Records Across Clusters")
     st.plotly_chart(fig_cluster_dist, use_container_width=True)
 
-    # Crime Level Summary
+    # 📘 Crime Level Summary
     st.subheader("📘 Crime Level Summary")
     cluster_summary = df.groupby('Cluster')['TOTAL  CRIMES'].agg(['mean', 'sum', 'count']).reset_index()
     st.dataframe(cluster_summary, use_container_width=True)
 
-    # Crime Trends Over the Years
+    # 📈 Crime Trends Over the Years
     st.subheader("📈 Crime Trends Over the Years")
     yearly_trend = df.groupby('YEAR')['TOTAL  CRIMES'].sum().reset_index()
     fig_trend = px.line(yearly_trend, x='YEAR', y='TOTAL  CRIMES', markers=True,
                         title="Crime Trend Over Years")
     st.plotly_chart(fig_trend, use_container_width=True)
 
-    # Total IPC Crimes per Cluster
-    st.subheader("🚨 Total IPC Crimes per Cluster")
+    # ⚠️ Total IPC Crimes per Cluster
+    st.subheader("⚠️ Total IPC Crimes per Cluster")
     fig_ipc = px.bar(df.groupby('Cluster')['TOTAL  CRIMES'].sum().reset_index(),
                      x='Cluster', y='TOTAL  CRIMES', color='Cluster',
                      title="Total IPC Crimes in Each Cluster")
     st.plotly_chart(fig_ipc, use_container_width=True)
 
-    # Most Common Crimes by State
+    # 🔥 Most Common Crimes by State
     st.subheader("🔥 Most Common Crimes by State")
     numeric_crimes = df[crime_columns].select_dtypes(include=np.number).columns.tolist()
     state_crime_totals = df.groupby('STATE/UT')[numeric_crimes].sum()
@@ -153,8 +173,7 @@ if uploaded_file:
     most_common_crimes.columns = ['State/UT', 'Most Common Crime']
     st.dataframe(most_common_crimes, use_container_width=True)
 
-
-    # Crime Level Breakdown (per Cluster)
+    # 🔎 Crime Level Breakdown by Cluster
     st.subheader("🔎 Crime Level Breakdown by Cluster")
     cluster_crime_avg = df.groupby('Cluster')[numeric_crimes].mean().T
     fig_heat = px.imshow(cluster_crime_avg,
@@ -162,7 +181,7 @@ if uploaded_file:
                          title="Average Crime Type per Cluster", aspect="auto")
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    # Average Crime Rate by State
+    # 🌐 Average Crime Rate by State
     st.subheader("🌐 Average Crime Rate by State")
     state_avg = df.groupby('STATE/UT')['TOTAL  CRIMES'].mean().reset_index()
     fig_avg_state = px.bar(state_avg, x='STATE/UT', y='TOTAL  CRIMES',
@@ -170,11 +189,8 @@ if uploaded_file:
                            labels={'TOTAL  CRIMES': 'Average Crime'})
     st.plotly_chart(fig_avg_state, use_container_width=True)
 
-    # --------------------------------------
     # 🔢 Top 10 States with Highest Crime in Selected Type
-    # --------------------------------------
     st.header("🔢 Top 10 States with Highest Crime in Selected Type")
-
     top_crime_df = df[df['YEAR'] == selected_year]
     if not top_crime_df.empty and selected_crimes:
         top_states = (
@@ -191,19 +207,16 @@ if uploaded_file:
         st.plotly_chart(fig_top_states, use_container_width=True)
     else:
         st.warning("Not enough data to display Top 10 States chart.")
-        
-    # --------------------------------------
-    # 📥 Cleaned Data Download
-    # --------------------------------------
-    st.header("📥 Download Cleaned Data")
+
+    # 📅 Cleaned Data Download
+    st.header("📅 Download Cleaned Data")
     excel_data = to_excel_download(df)
     st.download_button(
-        label="📤 Download Excel File",
+        label="📄 Download Excel File",
         data=excel_data,
         file_name="Cleaned_Crime_Data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
 else:
     st.title("📊 IndiaCrimetrics")
     st.info("Please upload a valid Excel file to begin.")
